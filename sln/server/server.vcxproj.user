@@ -1,0 +1,9 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <LocalDebuggerCommand>$(ProjectDir)..\..\Debug\aggligator.exe</LocalDebuggerCommand>
+    <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
+    <LocalDebuggerWorkingDirectory>$(ProjectDir)..\..\Debug\</LocalDebuggerWorkingDirectory>
+    <LocalDebuggerCommandArguments>--mode=server --flash=yes --congestions=1024 --bind=10000;10001 --host=192.168.0.24:7000</LocalDebuggerCommandArguments>
+  </PropertyGroup>
+</Project>
