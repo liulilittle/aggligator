@@ -50,8 +50,8 @@ static void aggligator_exit(boost::asio::io_context& context, bool shutdown = tr
 static void aggligator_help() noexcept
 {
     aggligator::string execution_file_name = aggligator::GetExecutionFileName();
-    aggligator::string messages = "Copyright (C) 2017 ~ 2035 SupersocksR ORG. All rights reserved.\r\n";
-    messages += "Aggligator(X) 1.0.0.24163 Version\r\n";
+    aggligator::string messages = "Copyright (C) 2017 ~ 2055 SupersocksR ORG. All rights reserved.\r\n";
+    messages += "Aggligator(X) 1.0.0.25053 Version\r\n";
     messages += "Cwd:\r\n    " + aggligator::GetCurrentDirectoryPath() + "\r\n";
     messages += "Usage:\r\n";
     messages += "        ./%s --mode=server --flash=yes --congestions=1024 --bind=10000,10001 --host=192.168.0.24:7000 \r\n";

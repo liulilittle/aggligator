@@ -201,19 +201,22 @@ namespace aggligator
             boost::asio::ip::udp::endpoint                              dst;
         };
 
+        template<typename _Tp>
+        struct packet_less {
+            constexpr bool                                              operator()(const _Tp& __x, const _Tp& __y) const noexcept {
+                return before(__x, __y);
+            }
+        };
+
         queue<send_packet>                                              send_queue_;
-        queue<recv_packet>                                              recv_queue_;
+        map_pr<uint32_t, recv_packet, packet_less<uint32_t>>            recv_queue_;
         uint32_t                                                        seq_no_         = 0;
         uint32_t                                                        ack_no_         = 1;
-        bool                                                            wraparound_     = false;
-        int                                                             rq_congestions_ = 0;
         std::shared_ptr<client>                                         client_;
         std::shared_ptr<aggligator>                                     app_;
 
         convergence(const std::shared_ptr<aggligator>& aggligator, const std::shared_ptr<client>& client) noexcept
-            : wraparound_(false)
-            , rq_congestions_(0)
-            , client_(client)
+            : client_(client)
             , app_(aggligator)
         {
             seq_no_ = (uint32_t)RandomNext(UINT16_MAX, INT32_MAX);
@@ -225,96 +228,7 @@ namespace aggligator
         }
 
         void                                                            close() noexcept;
-        void                                                            emplace_wraparound(std::list<recv_packet>& queue, const recv_packet& packet) noexcept
-        {
-            for (;;)
-            {
-                auto tail = queue.begin();
-                if (tail == queue.end())
-                {
-                    queue.emplace_back(packet);
-                    break;
-                }
-
-                auto position = std::upper_bound(queue.rbegin(), queue.rend(), packet,
-                    [this](const recv_packet& lhs, const recv_packet& rhs) noexcept
-                    {
-                        return after(lhs.seq, rhs.seq);
-                    });
-
-                queue.emplace(position.base(), packet);
-                break;
-            }
-        }
-        void                                                            emplace(std::list<recv_packet>& queue, const recv_packet& packet) noexcept
-        {
-            for (;;)
-            {
-                auto tail = queue.begin();
-                if (tail == queue.end())
-                {
-                    queue.emplace_back(packet);
-                    break;
-                }
-
-                if (tail->seq > packet.seq)
-                {
-                    queue.emplace_front(packet);
-                    break;
-                }
-
-                auto rtail = queue.rbegin();
-                if (rtail->seq <= packet.seq)
-                {
-                    queue.emplace_back(packet);
-                    break;
-                }
-
-                if ((packet.seq - tail->seq) > (rtail->seq - packet.seq))
-                {
-                    auto position = std::upper_bound(queue.rbegin(), queue.rend(), packet,
-                        [](const recv_packet& lhs, const recv_packet& rhs) noexcept
-                        {
-                            return lhs.seq > rhs.seq;
-                        });
-
-                    queue.emplace(position.base(), packet);
-                }
-                else
-                {
-                    auto position = std::lower_bound(queue.begin(), queue.end(), packet,
-                        [](const recv_packet& lhs, const recv_packet& rhs) noexcept
-                        {
-                            return lhs.seq < rhs.seq;
-                        });
-
-                    queue.emplace(position, packet);
-                }
-
-                break;
-            }
-        }
         static std::shared_ptr<Byte>                                    pack(Byte* packet, int packet_length, uint32_t seq, int& out) noexcept;
-        bool                                                            process(Byte* packet, int packet_length, bool dont_control) noexcept
-        {
-            bool ok = output(packet, packet_length);
-            if (ok)
-            {
-                if (dont_control)
-                {
-                    return true;
-                }
-
-                if (++ack_no_ == 0)
-                {
-                    wraparound_ = false;
-                }
-
-                return rq_congestions_-- > 0;
-            }
-
-            return false;
-        }
         bool                                                            input(Byte* packet, int packet_length) noexcept;
         bool                                                            output(Byte* packet, int packet_length) noexcept;
     };
@@ -1695,7 +1609,8 @@ namespace aggligator
             return false;
         }
 
-        if (pconvergence->rq_congestions_ > aggligator->congestions_)
+        int rq_congestions = (int)pconvergence->recv_queue_.size();
+        if (rq_congestions >= aggligator->congestions_)
         {
             return false;
         }
@@ -2059,20 +1974,29 @@ namespace aggligator
         int max_congestions = aggligator->congestions_;
         if (max_congestions < 1)
         {
-            return process(packet, packet_length, true);
+            if (output(packet, packet_length))
+            {
+                ack_no_++;
+                return true;
+            }
+            else
+            {
+                return false;
+            }
         }
         else
         {
             if (seq < ack_no_)
             {
-                wraparound_ = before(ack_no_, seq);
-                if (!wraparound_)
+                bool wraparound = before(ack_no_, seq);
+                if (!wraparound)
                 {
                     return true;
                 }
             }
 
-            if (++rq_congestions_ > max_congestions)
+            int rq_congestions = (int)recv_queue_.size();
+            if (rq_congestions >= max_congestions)
             {
                 return false;
             }
@@ -2080,7 +2004,11 @@ namespace aggligator
 
         if (ack_no_ == seq)
         {
-            if (!process(packet, packet_length, false))
+            if (output(packet, packet_length))
+            {
+                ack_no_++;
+            }
+            else
             {
                 return false;
             }
@@ -2089,14 +2017,18 @@ namespace aggligator
             auto endl = recv_queue_.end();
             while (tail != endl)
             {
-                if (ack_no_ != tail->seq)
+                if (ack_no_ != tail->first)
                 {
                     break;
                 }
                 else
                 {
-                    recv_packet& pr = *tail;
-                    if (!process(pr.packet.get(), pr.length, false))
+                    recv_packet& pr = tail->second;
+                    if (output(pr.packet.get(), pr.length))
+                    {
+                        ack_no_++;
+                    }
+                    else
                     {
                         return false;
                     }
@@ -2115,16 +2047,7 @@ namespace aggligator
         if (r.packet)
         {
             memcpy(r.packet.get(), packet, packet_length);
-            if (wraparound_)
-            {
-                emplace_wraparound(recv_queue_, r);
-            }
-            else
-            {
-                emplace(recv_queue_, r);
-            }
-
-            return true;
+            return recv_queue_.emplace(std::make_pair(seq, r)).second;
         }
         else
         {

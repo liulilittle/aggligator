@@ -334,6 +334,9 @@ namespace aggligator {
     template <class TValue>
     using vector                                                            = std::vector<TValue>;
 
+    template <typename _TKey, typename _TValue, typename _Pr>
+    using map_pr                                                            = std::map<_TKey, _TValue, _Pr>;
+
     template <typename T>
     constexpr T                                                             Malign(const T size, int alignment) noexcept {
         return (T)(((uint64_t)size + alignment - 1) & ~(static_cast<unsigned long long>(alignment) - 1));
