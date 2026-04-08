@@ -208,7 +208,7 @@ namespace aggligator
             }
         };
 
-        queue<send_packet>                                              send_queue_;
+        map_pr<uint32_t, send_packet, packet_less<uint32_t>>            send_queue_;   // Packets ready to be sent over TCP
         map_pr<uint32_t, recv_packet, packet_less<uint32_t>>            recv_queue_;
         uint32_t                                                        seq_no_         = 0;
         uint32_t                                                        ack_no_         = 1;
@@ -429,16 +429,18 @@ namespace aggligator
                     bool processed = false;
                     sending_ = false;
 
-                    if (ec == boost::system::errc::success)
+                if (ec == boost::system::errc::success)
+                {
+                    ptr aggligator = app_;
+                    if (aggligator)
                     {
-                        ptr aggligator = app_;
-                        if (aggligator)
-                        {
                             aggligator->tx_ += sz;
                             aggligator->tx_pps_++;
+                            // update per-connection tx counter for simple load balancing
+                            tx_bytes_ += sz;
                             processed = next();
-                        }
                     }
+                }
 
                     if (!processed)
                     {
@@ -476,7 +478,7 @@ namespace aggligator
                 return true;
             }
 
-            send_packet context = *tail;
+            send_packet context = tail->second; // map_pr stores pair<key, value>
             convergence->send_queue_.erase(tail);
 
             return sent(context.packet, context.length);
@@ -719,6 +721,7 @@ namespace aggligator
         client_ptr                                                      client_;
         std::shared_ptr<boost::asio::ip::tcp::socket>                   socket_;
         bool                                                            sending_;
+        uint64_t                                                        tx_bytes_ = 0; // bytes sent over this TCP connection (for simple load balancing)
         uint32_t                                                        next_;
         std::shared_ptr<Byte>                                           next_packet_;
 #if defined(_WIN32)
@@ -1680,38 +1683,47 @@ namespace aggligator
         int message_length;
         uint32_t seq = ++convergence->seq_no_;
 
-        std::shared_ptr<Byte> message = convergence::pack(packet, packet_length, seq, message_length);
+        std::shared_ptr<Byte> message = convergence->pack(packet, packet_length, seq, message_length);
         if (NULL == message || message_length < 1)
         {
             return false;
         }
 
-        queue<send_packet>& send_queue = convergence->send_queue_;
-        send_queue.emplace_back(send_packet{ message, message_length });
+        // Insert into ordered send queue keyed by sequence number
+        send_packet sp;
+        sp.seq = seq;
+        sp.packet = message;
+        sp.length = message_length;
+        convergence->send_queue_.emplace(std::make_pair(seq, sp));
 
         for (;;)
         {
-            auto sqt = send_queue.begin();
-            if (sqt == send_queue.end())
+            auto sqt = convergence->send_queue_.begin();
+            if (sqt == convergence->send_queue_.end())
             {
                 return true;
             }
 
+            // choose an idle connection with minimal tx_bytes_ (simple load balancing)
             connection_ptr connection;
-            for (; tail != endl; tail++)
+            uint64_t best_tx = UINT64_MAX;
+            for (auto it = tail; it != endl; ++it)
             {
-                connection_ptr& i = *tail;
+                connection_ptr& i = *it;
                 if (!i->sending_)
                 {
-                    connection = i;
-                    break;
+                    if (!connection || i->tx_bytes_ < best_tx)
+                    {
+                        connection = i;
+                        best_tx = i->tx_bytes_;
+                    }
                 }
             }
 
             if (connection)
             {
-                send_packet messages = *sqt;
-                send_queue.erase(sqt);
+                send_packet messages = sqt->second;
+                convergence->send_queue_.erase(sqt);
 
                 bool ok = connection->sent(messages.packet, messages.length);
                 if (ok)

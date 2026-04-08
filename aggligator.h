@@ -26,6 +26,7 @@ namespace aggligator
 
         struct send_packet
         {
+            uint32_t                                                            seq;    // Sequence number for ordering
             std::shared_ptr<Byte>                                               packet;
             int                                                                 length;
         };
